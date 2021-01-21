@@ -48,6 +48,7 @@
 #define JESD204_TX_REG_CONF1			0x214
 #define JESD204_TX_REG_CONF2			0x240
 #define JESD204_TX_REG_CONF3			0x244
+#define JESD204_TX_REG_CONF4			0x21C
 
 #define JESD204_TX_REG_MANUAL_SYNC_REQUEST	0x248
 
@@ -273,6 +274,7 @@ static int axi_jesd204_tx_apply_config(struct axi_jesd204_tx *jesd,
 	unsigned int multiframe_align;
 	unsigned int val;
 	unsigned int lane, i;
+	unsigned int tpl_datapath_width;
 
 	octets_per_multiframe = config->frames_per_multiframe *
 		config->octets_per_frame;
@@ -300,6 +302,27 @@ static int axi_jesd204_tx_apply_config(struct axi_jesd204_tx *jesd,
 			       jesd->base + JESD204_TX_REG_SYSREF_CONF);
 
 	writel_relaxed(val, jesd->base + JESD204_TX_REG_CONF0);
+
+	// TODO : Change tpl_datapath_width to be hardware discoverable
+	if (jesd->encoder == JESD204_ENCODER_8B10B) {
+		if (config->octets_per_frame % 3 == 0) {
+			tpl_datapath_width = 6;
+		} else {
+			tpl_datapath_width = 4;
+		}
+	}
+	if (jesd->encoder == JESD204_ENCODER_64B66B) {
+		if (config->octets_per_frame % 3 == 0) {
+			tpl_datapath_width = 12;
+		} else {
+			tpl_datapath_width = 8;
+		}
+	}
+	val = octets_per_multiframe/tpl_datapath_width - 1;
+	writel_relaxed(val, jesd->base + JESD204_TX_REG_CONF4);
+
+
+
 
 	if (jesd->encoder == JESD204_ENCODER_8B10B) {
 		for (i = 0, lane = 0; lane < jesd->num_lanes; lane++) {
