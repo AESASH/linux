@@ -30,14 +30,23 @@
 #include "adi_adrv9001_tx.h"
 #include "adi_adrv9001_stream.h"
 #include "adi_adrv9001_dpd.h"
+
 #include "adi_adrv9001_fh.h"
+
 #include "adi_adrv9001_gpio.h"
 #include "adi_adrv9001_ssi.h"
 
 #include "adrv9001_reg_addr_macros.h"
 #include "adrv9001_bf_hal.h"
 
+#ifdef ADI_ADRV9001_SI_REV_B0
+#define ADI_ADRV9001_ARM_BINARY_IMAGE_FILE_SIZE_BYTES (256*1024)
+#endif // ADI_ADRV9001_SI_REV_B0
+#ifdef ADI_ADRV9001_SI_REV_C0
 #define ADI_ADRV9001_ARM_BINARY_IMAGE_FILE_SIZE_BYTES (288*1024)
+#endif // ADI_ADRV9001_SI_REV_C0
+
+
 #define ADI_ADRV9001_RX_GAIN_TABLE_SIZE_ROWS 256
 #define ADI_ADRV9001_TX_ATTEN_TABLE_SIZE_ROWS 1024
 
@@ -45,7 +54,15 @@ int32_t adi_adrv9001_Utilities_ArmImage_Load(adi_adrv9001_Device_t *device, cons
 {
     int32_t recoveryAction = ADI_COMMON_ACT_NO_ACTION;
     uint32_t i = 0;
+#ifndef __KERNEL__
     uint8_t armBinaryImageBuffer[ADI_ADRV9001_ARM_BINARY_IMAGE_LOAD_CHUNK_SIZE_BYTES];
+#else
+    /*
+     * linux stack is not that big which means we need to be carefull. Some archs like arm set
+     * Wframe-larger-than=1024
+     */
+     static uint8_t armBinaryImageBuffer[ADI_ADRV9001_ARM_BINARY_IMAGE_LOAD_CHUNK_SIZE_BYTES];
+#endif
 
     /* Check device pointer is not null */
     ADI_ENTRY_EXPECT(device);
@@ -85,7 +102,15 @@ int32_t adi_adrv9001_Utilities_StreamImage_Load(adi_adrv9001_Device_t *device, c
 
     int32_t recoveryAction = ADI_COMMON_ACT_NO_ACTION;
     uint32_t i = 0;
+#ifndef __KERNEL__
     uint8_t streamBinaryImageBuffer[ADI_ADRV9001_STREAM_BINARY_IMAGE_LOAD_CHUNK_SIZE_BYTES];
+#else
+    /*
+     * linux stack is not that big which means we need to be carefull. Some archs like arm set
+     * Wframe-larger-than=1024
+     */
+    static uint8_t streamBinaryImageBuffer[ADI_ADRV9001_STREAM_BINARY_IMAGE_LOAD_CHUNK_SIZE_BYTES];
+#endif
 
     /* Check device pointer is not null */
     ADI_ENTRY_EXPECT(device);
@@ -134,9 +159,6 @@ int32_t adi_adrv9001_Utilities_RxGainTable_Load(adi_adrv9001_Device_t *device, c
     static adi_adrv9001_RxGainTableRow_t rxGainTableRowBuffer[ADI_ADRV9001_RX_GAIN_TABLE_SIZE_ROWS];
     static const uint8_t NUM_COLUMNS = 7;
 
-    static const uint8_t MIN_GAIN_INDEX_ORX = 2;
-    static const uint8_t MAX_GAIN_INDEX_ORX = 14;
-
     int32_t returnTableEntry = NUM_COLUMNS;
 
     /* Check device pointer is not null */
@@ -169,8 +191,8 @@ int32_t adi_adrv9001_Utilities_RxGainTable_Load(adi_adrv9001_Device_t *device, c
 
         if (gainIndex < ADI_ADRV9001_RX_GAIN_INDEX_MIN)
         {
-            if ((gainIndex < MIN_GAIN_INDEX_ORX) ||
-                (gainIndex > MAX_GAIN_INDEX_ORX))
+            if ((gainIndex < ADI_ADRV9001_ORX_GAIN_INDEX_MIN) ||
+                (gainIndex > ADI_ADRV9001_ORX_GAIN_INDEX_MAX))
             {
                 break;
             }

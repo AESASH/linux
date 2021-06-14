@@ -819,8 +819,6 @@ static int ad9371_setup(struct ad9371_rf_phy *phy)
 		ret = MYKONOS_setRfPllFrequency(mykDevice, RX_PLL,
 						mykDevice->rx->rxPllLoFrequency_Hz);
 		if (ret != MYKONOS_ERR_OK) {
-			dev_err(&phy->spi->dev, "%s (%d)",
-				getMykonosErrorMessage(ret), ret);
 			ret = -EFAULT;
 			goto out;
 		}
@@ -830,8 +828,6 @@ static int ad9371_setup(struct ad9371_rf_phy *phy)
 		ret = MYKONOS_setRfPllFrequency(mykDevice, TX_PLL,
 						mykDevice->tx->txPllLoFrequency_Hz);
 		if (ret != MYKONOS_ERR_OK) {
-			dev_err(&phy->spi->dev, "%s (%d)",
-				getMykonosErrorMessage(ret), ret);
 			ret = -EFAULT;
 			goto out;
 		}
@@ -841,8 +837,6 @@ static int ad9371_setup(struct ad9371_rf_phy *phy)
 		ret = MYKONOS_setRfPllFrequency(mykDevice, SNIFFER_PLL,
 						mykDevice->obsRx->snifferPllLoFrequency_Hz);
 		if (ret != MYKONOS_ERR_OK) {
-			dev_err(&phy->spi->dev, "%s (%d)",
-				getMykonosErrorMessage(ret), ret);
 			ret = -EFAULT;
 			goto out;
 		}
@@ -2713,9 +2707,24 @@ static ssize_t ad9371_debugfs_read(struct file *file, char __user *userbuf,
 		}
 
 	} else if (entry->cmd) {
-		u8 index, mask;
+		u8 index, mask, status;
+		u32 errcnt;
 
 		switch (entry->cmd) {
+		case DBGFS_BIST_PRBS_ERR_TX:
+			for (index = 0; index < 4; index++) {
+				mutex_lock(&phy->indio_dev->mlock);
+				ret = MYKONOS_readDeframerPrbsCounters(phy->mykDevice,
+								       index, &errcnt);
+				mutex_unlock(&phy->indio_dev->mlock);
+				if (ret < 0)
+					return ret;
+
+				len += snprintf(buf + len, sizeof(buf) - len,
+						"0x%08x%c", errcnt,
+						index == 3 ? '\n' : ' ');
+			}
+			break;
 		case DBGFS_MONITOR_OUT:
 			mutex_lock(&phy->indio_dev->mlock);
 			ret = MYKONOS_getGpioMonitorOut(phy->mykDevice,
@@ -2726,6 +2735,16 @@ static ssize_t ad9371_debugfs_read(struct file *file, char __user *userbuf,
 
 			len = snprintf(buf, sizeof(buf), "%u %u\n",
 				       index, mask);
+			break;
+		case DBGFS_PLLS_STATUS:
+			mutex_lock(&phy->indio_dev->mlock);
+			ret = MYKONOS_checkPllsLockStatus(phy->mykDevice, &status);
+			mutex_unlock(&phy->indio_dev->mlock);
+			if (ret < 0)
+				return ret;
+
+			len = snprintf(buf, sizeof(buf), "0x%02x\n",
+				       status);
 			break;
 		default:
 			val = entry->val;
@@ -2806,6 +2825,18 @@ static ssize_t ad9371_debugfs_write(struct file *file,
 
 		entry->val = val;
 		return count;
+	case DBGFS_BIST_PRBS_ERR_RX:
+		if (ret != 1)
+			return -EINVAL;
+
+		mutex_lock(&phy->indio_dev->mlock);
+		ret = MYKONOS_rxInjectPrbsError(phy->mykDevice);
+		mutex_unlock(&phy->indio_dev->mlock);
+		if (ret < 0)
+			return ret;
+
+		entry->val = val;
+		return count;
 	case DBGFS_BIST_PRBS_OBS:
 		if (ret != 1)
 			return -EINVAL;
@@ -2813,6 +2844,44 @@ static ssize_t ad9371_debugfs_write(struct file *file,
 		mutex_lock(&phy->indio_dev->mlock);
 		ret = MYKONOS_enableObsRxFramerPrbs(phy->mykDevice,
 						    (val > 0) ? val - 1 : 0, !!val);
+		mutex_unlock(&phy->indio_dev->mlock);
+		if (ret < 0)
+			return ret;
+
+		entry->val = val;
+		return count;
+	case DBGFS_BIST_PRBS_ERR_OBS:
+		if (ret != 1)
+			return -EINVAL;
+
+		mutex_lock(&phy->indio_dev->mlock);
+		ret = MYKONOS_obsRxInjectPrbsError(phy->mykDevice);
+		mutex_unlock(&phy->indio_dev->mlock);
+		if (ret < 0)
+			return ret;
+
+		entry->val = val;
+		return count;
+	case DBGFS_BIST_PRBS_TX:
+		if (ret != 2)
+			return -EINVAL;
+
+		mutex_lock(&phy->indio_dev->mlock);
+		ret = MYKONOS_enableDeframerPrbsChecker(phy->mykDevice, val,
+							(val2 > 0) ? val2 - 1 : 0,
+							!!val2);
+		mutex_unlock(&phy->indio_dev->mlock);
+		if (ret < 0)
+			return ret;
+
+		entry->val = val;
+		return count;
+	case DBGFS_BIST_PRBS_ERR_TX:
+		if (ret != 1)
+			return -EINVAL;
+
+		mutex_lock(&phy->indio_dev->mlock);
+		ret = MYKONOS_clearDeframerPrbsCounters(phy->mykDevice);
 		mutex_unlock(&phy->indio_dev->mlock);
 		if (ret < 0)
 			return ret;
@@ -2903,9 +2972,14 @@ static int ad9371_register_debugfs(struct iio_dev *indio_dev)
 	ad9371_add_debugfs_entry(phy, "loopback_tx_rx", DBGFS_LOOPBACK_TX_RX);
 	ad9371_add_debugfs_entry(phy, "loopback_tx_obs", DBGFS_LOOPBACK_TX_OBS);
 	ad9371_add_debugfs_entry(phy, "bist_prbs_rx", DBGFS_BIST_PRBS_RX);
+	ad9371_add_debugfs_entry(phy, "bist_prbs_err_rx", DBGFS_BIST_PRBS_ERR_RX);
 	ad9371_add_debugfs_entry(phy, "bist_prbs_obs", DBGFS_BIST_PRBS_OBS);
+	ad9371_add_debugfs_entry(phy, "bist_prbs_err_obs", DBGFS_BIST_PRBS_ERR_OBS);
+	ad9371_add_debugfs_entry(phy, "bist_prbs_tx", DBGFS_BIST_PRBS_TX);
+	ad9371_add_debugfs_entry(phy, "bist_prbs_err_tx", DBGFS_BIST_PRBS_ERR_TX);
 	ad9371_add_debugfs_entry(phy, "bist_tone", DBGFS_BIST_TONE);
 	ad9371_add_debugfs_entry(phy, "monitor_out", DBGFS_MONITOR_OUT);
+	ad9371_add_debugfs_entry(phy, "plls_lock_status", DBGFS_PLLS_STATUS);
 
 	for (i = 0; i < phy->ad9371_debugfs_entry_index; i++)
 		d = debugfs_create_file(
@@ -4764,6 +4838,9 @@ static int ad9371_probe(struct spi_device *spi)
 	phy->sysref_req_gpio = devm_gpiod_get(&spi->dev, "sysref_req",
 					      GPIOD_OUT_HIGH);
 
+	phy->test_gpio = devm_gpiod_get_optional(&spi->dev, "test",
+						 GPIOD_OUT_LOW);
+
 	phy->mykDevice->spiSettings->spi 		 = spi;
 	phy->mykDevice->spiSettings->writeBitPolarity    = 0;
 	phy->mykDevice->spiSettings->longInstructionWord = 1;
@@ -4787,23 +4864,36 @@ static int ad9371_probe(struct spi_device *spi)
 		} else {
 			phy->jesd_rx_clk = clk;
 
-			phy->jesd_tx_clk = devm_clk_get(&spi->dev, "jesd_tx_clk");
-			if (IS_ERR(phy->jesd_tx_clk) && PTR_ERR(phy->jesd_tx_clk) != -ENOENT)
+			phy->jesd_tx_clk = devm_clk_get_optional(&spi->dev, "jesd_tx_clk");
+			if (IS_ERR(phy->jesd_tx_clk))
 				return PTR_ERR(phy->jesd_tx_clk);
 		}
 
-		phy->jesd_rx_os_clk = devm_clk_get(&spi->dev, "jesd_rx_os_clk");
-		if (IS_ERR(phy->jesd_rx_os_clk) && PTR_ERR(phy->jesd_rx_os_clk) != -ENOENT)
+		phy->jesd_rx_os_clk = devm_clk_get_optional(&spi->dev, "jesd_rx_os_clk");
+		if (IS_ERR(phy->jesd_rx_os_clk))
 			return PTR_ERR(phy->jesd_rx_os_clk);
 
 		phy->fmc_clk = devm_clk_get(&spi->dev, "fmc_clk");
 		if (IS_ERR(phy->fmc_clk))
 			return PTR_ERR(phy->fmc_clk);
 
-		phy->sysref_dev_clk = devm_clk_get(&spi->dev, "sysref_dev_clk");
-		phy->sysref_fmc_clk = devm_clk_get(&spi->dev, "sysref_fmc_clk");
-
 		ret = clk_prepare_enable(phy->fmc_clk);
+		if (ret)
+			return ret;
+
+		phy->sysref_dev_clk = devm_clk_get_optional(&spi->dev, "sysref_dev_clk");
+		if (IS_ERR(phy->sysref_dev_clk))
+			return PTR_ERR(phy->sysref_dev_clk);
+
+		phy->sysref_fmc_clk = devm_clk_get_optional(&spi->dev, "sysref_fmc_clk");
+		if (IS_ERR(phy->sysref_fmc_clk))
+			return PTR_ERR(phy->sysref_fmc_clk);
+
+		ret = clk_prepare_enable(phy->sysref_dev_clk);
+		if (ret)
+			return ret;
+
+		ret = clk_prepare_enable(phy->sysref_fmc_clk);
 		if (ret)
 			return ret;
 	}

@@ -12,6 +12,7 @@
 #define ADI_AXI_ADC_H_
 
 #include <linux/fpga/adi-axi-common.h>
+#include <linux/iio/iio.h>
 
 /* ADC COMMON */
 
@@ -197,6 +198,7 @@ struct axiadc_converter {
 	struct clock_scale		adc_clkscale;
 	struct clk		*lane_clk;
 	struct clk		*sysref_clk;
+	struct clk		*out_clk;
 	void 			*phy;
 	struct gpio_desc		*pwrdown_gpio;
 	struct gpio_desc		*reset_gpio;

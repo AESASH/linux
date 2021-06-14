@@ -16,7 +16,6 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
-#include <linux/of.h>
 #include <linux/platform_device.h>
 
 /* Transceiver TDD Control (axi_ad*) */
@@ -226,7 +225,8 @@ static ssize_t cf_axi_tdd_read(struct iio_dev *indio_dev, uintptr_t private,
 		return -EINVAL;
 	}
 
-	return sprintf(buf, "%llu\n", DIV_ROUND_CLOSEST_ULL((u64)val * 1000, st->clk.rate));
+	return sprintf(buf, "%llu\n", DIV_ROUND_CLOSEST_ULL((u64)val * 1000,
+							    READ_ONCE(st->clk.rate)));
 }
 
 static ssize_t cf_axi_tdd_write(struct iio_dev *indio_dev, uintptr_t private,
@@ -279,7 +279,7 @@ static ssize_t cf_axi_tdd_write(struct iio_dev *indio_dev, uintptr_t private,
 		return -EINVAL;
 	}
 
-	val =  DIV_ROUND_CLOSEST_ULL((u64)val * st->clk.rate, 1000);
+	val =  DIV_ROUND_CLOSEST_ULL((u64)val * READ_ONCE(st->clk.rate), 1000);
 	tdd_write(st, reg, ADI_TDD_RX_TX(val));
 
 	return len;
@@ -403,7 +403,7 @@ static int cf_axi_tdd_rate_change(struct notifier_block *nb, unsigned long flags
 	struct clk_notifier_data *cnd = data;
 
 	/* cache the new rate */
-	clk->rate = cnd->new_rate;
+	WRITE_ONCE(clk->rate, cnd->new_rate);
 
 	return NOTIFY_OK;
 }
@@ -468,7 +468,6 @@ MODULE_DEVICE_TABLE(of, cf_axi_tdd_of_match);
 
 static int cf_axi_tdd_probe(struct platform_device *pdev)
 {
-	struct device_node *np = pdev->dev.of_node;
 	unsigned int expected_version, version;
 	struct cf_axi_tdd_state *st;
 	struct iio_dev *indio_dev;
@@ -505,7 +504,7 @@ static int cf_axi_tdd_probe(struct platform_device *pdev)
 
 	mutex_init(&st->lock);
 	indio_dev->dev.parent = &pdev->dev;
-	indio_dev->name = np->name;
+	indio_dev->name = "axi-core-tdd";
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = cf_axi_tdd_channels;
 	indio_dev->num_channels = ARRAY_SIZE(cf_axi_tdd_channels);

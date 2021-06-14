@@ -77,6 +77,10 @@
 #define GTH34_QPLL1_FBDIV		0x94
 #define GTH34_QPLL1_REFCLK_DIV		0x98
 
+#define GTX_RX_PRBS_ERR_CNT		0x15c /* 16-bit */
+#define GTH3_RX_PRBS_ERR_CNT		0x15E /* 32-bit */
+#define GTH4_RX_PRBS_ERR_CNT		0x25E /* 32-bit also applied for GTY */
+
 #define GTH34_QPLL_FBDIV(xcvr, x)	\
 	(0x14 + xilinx_xcvr_qpll_sel((xcvr), (x)) * 0x80)
 #define GTH34_QPLL_REFCLK_DIV(xcvr, x)	\
@@ -494,6 +498,9 @@ int xilinx_xcvr_calc_qpll_config(struct xilinx_xcvr *xcvr,
 	static const u8 N_gtx2[] = {16, 20, 32, 40, 64, 66, 80, 100, 0};
 	static const u8 N_gth34[] = {16, 20, 32, 40, 64, 66, 75, 80, 100,
 			112, 120, 125, 150, 160, 0};
+	/* N_gty4: entire range is 16-160, can add more if required */
+	static const u8 N_gty4[] = {16, 20, 32, 33, 40, 64, 66, 75, 80, 99,
+			100, 112, 120, 125, 132, 150, 160, 0};
 
 	switch (xcvr->type) {
 	case XILINX_XCVR_TYPE_S7_GTX2:
@@ -501,8 +508,10 @@ int xilinx_xcvr_calc_qpll_config(struct xilinx_xcvr *xcvr,
 		break;
 	case XILINX_XCVR_TYPE_US_GTH3:
 	case XILINX_XCVR_TYPE_US_GTH4:
-	case XILINX_XCVR_TYPE_US_GTY4:
 		N = N_gth34;
+		break;
+	case XILINX_XCVR_TYPE_US_GTY4:
+		N = N_gty4;
 		break;
 	default:
 		return -EINVAL;
@@ -1270,6 +1279,193 @@ int xilinx_xcvr_write_out_div(struct xilinx_xcvr *xcvr, unsigned int drp_port,
 }
 EXPORT_SYMBOL_GPL(xilinx_xcvr_write_out_div);
 
+static unsigned int xilinx_xcvr_gth4_prog_div_to_val(unsigned int div)
+{
+	switch (div) {
+	case 0:
+		return 32768;
+	case 4:
+		return 57432;
+	case 5:
+		return 57464;
+	case 8:
+		return 57408;
+	case 10:
+		return 57440;
+	case 16:
+		return 57410;
+	case 17: /* This is 16.5 rounded to 17 */
+		return 57880;
+	case 20:
+		return 57442;
+	case 32:
+		return 57414;
+	case 33:
+		return 57856;
+	case 40:
+		return 57415;
+	case 64:
+		return 57422;
+	case 66:
+		return 57858;
+	case 80:
+		return 57423;
+	case 100:
+		return 57455;
+	case 128:
+		return 24654;
+	case 132:
+		return 57862;
+	default:
+		return 32768; /* 0 disabled */
+	}
+}
+
+static unsigned int xilinx_xcvr_gty4_gth3_prog_div_to_val(unsigned int div)
+{
+	switch (div) {
+	case 0:
+		return 32768;
+	case 4:
+		return 57744;
+	case 5:
+		return 49648;
+	case 8:
+		return 57728;
+	case 10:
+		return 57760;
+	case 16:
+		return 57730;
+	case 17: /* This is 16.5 rounded to 17 */
+		return 49672;
+	case 20:
+		return 57762;
+	case 32:
+		return 57734;
+	case 33:
+		return 49800;
+	case 40:
+		return 57766;
+	case 64:
+		return 57742;
+	case 66:
+		return 50056;
+	case 80:
+		return 57743;
+	case 100:
+		return 57775;
+	default:
+		return 32768; /* 0 disabled */
+	}
+}
+
+static int xilinx_xcvr_gth3_gty4_write_progdiv_div(struct xilinx_xcvr *xcvr,
+	unsigned int drp_port, int rx_prog_div, int tx_prog_div)
+{
+	int ret;
+
+	if (rx_prog_div >= 0) {
+		ret = xilinx_xcvr_drp_update(xcvr, drp_port, 0xC6, 0xFFFF,
+			xilinx_xcvr_gty4_gth3_prog_div_to_val(rx_prog_div));
+		if (ret)
+			return ret;
+	}
+	if (tx_prog_div >= 0) {
+		ret = xilinx_xcvr_drp_update(xcvr, drp_port,
+			(xcvr->type == XILINX_XCVR_TYPE_US_GTY4) ? 0x57 : 0x3E,
+			0xFFFF,
+			xilinx_xcvr_gty4_gth3_prog_div_to_val(tx_prog_div));
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int xilinx_xcvr_gth4_write_progdiv_div(struct xilinx_xcvr *xcvr,
+	unsigned int drp_port, int rx_prog_div, int tx_prog_div)
+{
+	int ret;
+
+	if (rx_prog_div >= 0) {
+		ret = xilinx_xcvr_drp_update(xcvr, drp_port, 0xC6, 0xFFFF,
+			xilinx_xcvr_gth4_prog_div_to_val(rx_prog_div));
+		if (ret)
+			return ret;
+	}
+	if (tx_prog_div >= 0) {
+		ret = xilinx_xcvr_drp_update(xcvr, drp_port, 0x3E, 0xFFFF,
+			xilinx_xcvr_gth4_prog_div_to_val(tx_prog_div));
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+int xilinx_xcvr_write_prog_div(struct xilinx_xcvr *xcvr, unsigned int drp_port,
+	int rx_prog_div, int tx_prog_div)
+{
+	switch (xcvr->type) {
+	case XILINX_XCVR_TYPE_US_GTH3:
+	case XILINX_XCVR_TYPE_US_GTY4:
+		return xilinx_xcvr_gth3_gty4_write_progdiv_div(xcvr, drp_port,
+			rx_prog_div, tx_prog_div);
+	case XILINX_XCVR_TYPE_US_GTH4:
+		return xilinx_xcvr_gth4_write_progdiv_div(xcvr, drp_port,
+			rx_prog_div, tx_prog_div);
+	default:
+		return -EINVAL;
+	}
+}
+EXPORT_SYMBOL_GPL(xilinx_xcvr_write_prog_div);
+
+static unsigned int xilinx_xcvr_prog_div_rate_to_val(unsigned int rate)
+{
+	switch (rate) {
+	case 1:
+		return 1;
+	case 2:
+		return 0;
+	default:
+		return 0;
+	}
+}
+
+static int xilinx_xcvr_gty4_write_progdiv_div_rate(struct xilinx_xcvr *xcvr,
+	unsigned int drp_port, int rx_rate, int tx_rate)
+{
+	int ret;
+
+	if (rx_rate >= 0) {
+		ret = xilinx_xcvr_drp_update(xcvr, drp_port, 0x103, 0x1,
+			xilinx_xcvr_prog_div_rate_to_val(rx_rate));
+		if (ret)
+			return ret;
+	}
+	if (tx_rate >= 0) {
+		ret = xilinx_xcvr_drp_update(xcvr, drp_port, 0x105, 0x1,
+			xilinx_xcvr_prog_div_rate_to_val(tx_rate));
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+int xilinx_xcvr_write_prog_div_rate(struct xilinx_xcvr *xcvr,
+	unsigned int drp_port, int rx_rate, int tx_rate)
+{
+	switch (xcvr->type) {
+	case XILINX_XCVR_TYPE_US_GTY4:
+		return xilinx_xcvr_gty4_write_progdiv_div_rate(xcvr, drp_port,
+			rx_rate, tx_rate);
+	default:
+		return -EINVAL;
+	}
+}
+EXPORT_SYMBOL_GPL(xilinx_xcvr_write_prog_div_rate);
+
 int xilinx_xcvr_write_rx_clk25_div(struct xilinx_xcvr *xcvr,
 	unsigned int drp_port, unsigned int div)
 {
@@ -1330,6 +1526,76 @@ int xilinx_xcvr_write_tx_clk25_div(struct xilinx_xcvr *xcvr,
 	return xilinx_xcvr_drp_update(xcvr, drp_port, reg, mask, div);
 }
 EXPORT_SYMBOL_GPL(xilinx_xcvr_write_tx_clk25_div);
+
+int xilinx_xcvr_prbsel_enc_get(struct xilinx_xcvr *xcvr, unsigned int prbs, bool reverse_lu)
+{
+	const u8 gthy_prbs_lut[] = {0, 7, 9, 15, 23, 31};
+	const u8 gtx_prbs_lut[] = {0, 7, 15, 23, 31};
+	int i;
+
+	switch (xcvr->type) {
+	case XILINX_XCVR_TYPE_S7_GTX2:
+		if (reverse_lu && prbs < ARRAY_SIZE(gtx_prbs_lut))
+			return gtx_prbs_lut[prbs];
+
+		for (i = 0; i < ARRAY_SIZE(gtx_prbs_lut); i++)
+			if (gtx_prbs_lut[i] == prbs)
+				return i;
+		break;
+	case XILINX_XCVR_TYPE_US_GTH3:
+	case XILINX_XCVR_TYPE_US_GTH4:
+	case XILINX_XCVR_TYPE_US_GTY4:
+		if (reverse_lu && prbs < ARRAY_SIZE(gthy_prbs_lut))
+			return gthy_prbs_lut[prbs];
+
+		for (i = 0; i < ARRAY_SIZE(gthy_prbs_lut); i++)
+			if (gthy_prbs_lut[i] == prbs)
+				return i;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return -EINVAL;
+}
+EXPORT_SYMBOL_GPL(xilinx_xcvr_prbsel_enc_get);
+
+int xilinx_xcvr_prbs_err_cnt_get(struct xilinx_xcvr *xcvr,
+	unsigned int drp_port, unsigned int *cnt)
+{
+	unsigned int addr;
+	int val, val2 = 0;
+
+	switch (xcvr->type) {
+	case XILINX_XCVR_TYPE_S7_GTX2:
+		addr = GTX_RX_PRBS_ERR_CNT;
+		break;
+	case XILINX_XCVR_TYPE_US_GTH3:
+		addr = GTH3_RX_PRBS_ERR_CNT;
+		break;
+	case XILINX_XCVR_TYPE_US_GTH4:
+	case XILINX_XCVR_TYPE_US_GTY4:
+		addr = GTH4_RX_PRBS_ERR_CNT;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	val = xilinx_xcvr_drp_read(xcvr, drp_port, addr);
+	if (val < 0)
+		return val;
+
+	if (xcvr->type != XILINX_XCVR_TYPE_S7_GTX2) {
+		val2 = xilinx_xcvr_drp_read(xcvr, drp_port, addr + 1);
+		if (val < 0)
+			return val;
+	}
+
+	*cnt = ((val2 & 0xFFFF) << 16) | (val & 0xFFFF);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(xilinx_xcvr_prbs_err_cnt_get);
 
 MODULE_AUTHOR("Lars-Peter Clausen <lars@metafoo.de>");
 MODULE_DESCRIPTION("Xilinx high-speed transceiver dynamic reconfiguration");

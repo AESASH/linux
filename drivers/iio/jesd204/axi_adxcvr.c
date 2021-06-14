@@ -48,6 +48,17 @@ static inline void adxcvr_write(struct adxcvr_state *st,
 	iowrite32(val, st->regs + reg);
 }
 
+static void adxcvr_bit_toggle_high(struct adxcvr_state *st,
+	unsigned int reg, unsigned int bit_mask)
+{
+	unsigned int val;
+
+	val = adxcvr_read(st, reg);
+	adxcvr_write(st, reg, val | bit_mask);
+	val &= ~bit_mask;
+	adxcvr_write(st, reg, val);
+}
+
 static int adxcvr_drp_wait_idle(struct adxcvr_state *st, unsigned int drp_addr)
 {
 	unsigned int val;
@@ -141,17 +152,21 @@ static ssize_t adxcvr_debug_reg_write(struct device *dev,
 
 			st->addr = val & 0xFFFF;
 
-			if (ret == 3)
+			if (ret == 3) {
+				mutex_lock(&st->mutex);
 				adxcvr_write(st, st->addr, val2);
-
+				mutex_unlock(&st->mutex);
+			}
 		} else if (strncmp(dest, "drp", sizeof(dest)) == 0 && ret > 2) {
 			st->addr = BIT(31) | (val & 0x1FF) << 16 |
 				   (val2 & 0xFFFF);
 
 			if (ret == 4) {
+				mutex_lock(&st->mutex);
 				ret = adxcvr_drp_write(&st->xcvr,
 							val & 0x1FF,
 							val2 & 0xFFFF, val3);
+				mutex_unlock(&st->mutex);
 				if (ret)
 					return ret;
 			}
@@ -174,23 +189,183 @@ static ssize_t adxcvr_debug_reg_read(struct device *dev,
 	unsigned int val;
 	int ret;
 
+	mutex_lock(&st->mutex);
 	if (st->addr & BIT(31)) {
 		ret = adxcvr_drp_read(&st->xcvr,
 				      (st->addr >> 16) & 0x1FF,
 				      st->addr & 0xFFFF);
-		if (ret < 0)
+		if (ret < 0) {
+			mutex_unlock(&st->mutex);
 			return ret;
+		}
 
 		val = ret;
 	} else {
 		val = adxcvr_read(st, st->addr);
 	}
+	mutex_unlock(&st->mutex);
 
 	return sprintf(buf, "0x%X\n", val);
 }
 
-static DEVICE_ATTR(reg_access, 0600, adxcvr_debug_reg_read,
+static DEVICE_ATTR(reg_access, 0644, adxcvr_debug_reg_read,
 		   adxcvr_debug_reg_write);
+
+static ssize_t adxcvr_prbs_select_store(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct adxcvr_state *st = dev_get_drvdata(dev);
+	unsigned int val, rval;
+	int ret;
+
+	ret = kstrtouint(buf, 10, &rval);
+	if (ret)
+		return ret;
+
+	ret = xilinx_xcvr_prbsel_enc_get(&st->xcvr, rval, false);
+	if (ret < 0)
+		return ret;
+
+	mutex_lock(&st->mutex);
+	val = adxcvr_read(st, ADXCVR_REG_REG_PRBS_CNTRL);
+
+	val &= ~ADXCVR_PRBSEL(~0);
+	val |=  ADXCVR_PRBSEL(ret);
+
+	adxcvr_write(st, ADXCVR_REG_REG_PRBS_CNTRL, val);
+
+	adxcvr_bit_toggle_high(st, ADXCVR_REG_REG_PRBS_CNTRL,
+		ADXCVR_PRBS_CNT_RESET);
+	mutex_unlock(&st->mutex);
+
+	return count;
+}
+
+static ssize_t adxcvr_prbs_select_show(struct device *dev,
+				     struct device_attribute *attr,
+				     char *buf)
+{
+	struct adxcvr_state *st = dev_get_drvdata(dev);
+	unsigned int val;
+	int ret;
+
+	mutex_lock(&st->mutex);
+	val = adxcvr_read(st, ADXCVR_REG_REG_PRBS_CNTRL);
+	mutex_unlock(&st->mutex);
+
+	ret = xilinx_xcvr_prbsel_enc_get(&st->xcvr, ADXCVR_PRBSEL(val), true);
+	if (ret < 0)
+		return ret;
+
+	return sprintf(buf, "%u\n", ret);
+}
+
+static DEVICE_ATTR(prbs_select, 0644, adxcvr_prbs_select_show,
+	adxcvr_prbs_select_store);
+
+static ssize_t adxcvr_prbs_counter_reset_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct adxcvr_state *st = dev_get_drvdata(dev);
+	bool reset;
+	int ret;
+
+	ret = strtobool(buf, &reset);
+	if (ret)
+		return ret;
+
+	if (reset) {
+		mutex_lock(&st->mutex);
+		adxcvr_bit_toggle_high(st, ADXCVR_REG_REG_PRBS_CNTRL,
+			ADXCVR_PRBS_CNT_RESET);
+		mutex_unlock(&st->mutex);
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR(prbs_counter_reset, 0200, NULL, adxcvr_prbs_counter_reset_store);
+
+static ssize_t adxcvr_prbs_error_counter_show(struct device *dev,
+				     struct device_attribute *attr,
+				     char *buf)
+{
+	struct adxcvr_state *st = dev_get_drvdata(dev);
+	unsigned int count;
+	ssize_t len = 0;
+	int i, ret;
+
+	mutex_lock(&st->mutex);
+	for (i = 0; i < st->num_lanes; i++) {
+		ret = xilinx_xcvr_prbs_err_cnt_get(&st->xcvr,
+			ADXCVR_DRP_PORT_CHANNEL(i), &count);
+		if (ret < 0) {
+			mutex_unlock(&st->mutex);
+			return ret;
+		}
+		len += sprintf(buf + len, "%u ", count);
+	}
+	mutex_unlock(&st->mutex);
+
+	len += sprintf(buf + len, "\n");
+
+	return len;
+}
+
+static DEVICE_ATTR(prbs_error_counters, 0644, adxcvr_prbs_error_counter_show,
+	adxcvr_prbs_counter_reset_store);
+
+static ssize_t adxcvr_prbs_error_inject_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct adxcvr_state *st = dev_get_drvdata(dev);
+	bool inject;
+	int ret;
+
+	ret = strtobool(buf, &inject);
+	if (ret)
+		return ret;
+
+	if (inject) {
+		mutex_lock(&st->mutex);
+		adxcvr_bit_toggle_high(st, ADXCVR_REG_REG_PRBS_CNTRL,
+			ADXCVR_PRBS_FORCE_ERR);
+		mutex_unlock(&st->mutex);
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR(prbs_error_inject, 0200, NULL,
+	adxcvr_prbs_error_inject_store);
+
+static ssize_t adxcvr_prbs_status_show(struct device *dev,
+				     struct device_attribute *attr,
+				     char *buf)
+{
+	struct adxcvr_state *st = dev_get_drvdata(dev);
+	unsigned int val;
+	const char *status;
+
+	mutex_lock(&st->mutex);
+	val = adxcvr_read(st, ADXCVR_REG_REG_PRBS_STATUS);
+	mutex_unlock(&st->mutex);
+
+	if (ADXCVR_PRBS_LOCKED(val))
+		if (ADXCVR_PRBS_ERR(val))
+			status = "error";
+		else
+			status = "valid";
+	else
+		status = "unlocked";
+
+	return sprintf(buf, "%s\n", status);
+}
+
+static DEVICE_ATTR(prbs_status, 0444, adxcvr_prbs_status_show, NULL);
 
 static int adxcvr_status_error(struct device *dev)
 {
@@ -350,7 +525,7 @@ static int adxcvr_clk_set_rate(struct clk_hw *hw,
 		container_of(hw, struct adxcvr_state, lane_clk_hw);
 	struct xilinx_xcvr_cpll_config cpll_conf;
 	struct xilinx_xcvr_qpll_config qpll_conf;
-	unsigned int out_div, clk25_div;
+	unsigned int out_div, clk25_div, prog_div;
 	unsigned int i;
 	int ret;
 
@@ -387,6 +562,59 @@ static int adxcvr_clk_set_rate(struct clk_hw *hw,
 			st->tx_enable ? out_div : -1);
 		if (ret < 0)
 			return ret;
+
+		if (st->out_clk_sel == XCVR_PROGDIV_CLK) {
+			unsigned int max_progdiv, div = 1, ratio;
+
+			if (st->xcvr.encoding == ENC_66B64B)
+				ratio = 66;
+			else
+				ratio = 40;
+
+			/* Set RX|TX_PROGDIV_RATE = 2 on GTY4 */
+			ret = xilinx_xcvr_write_prog_div_rate(&st->xcvr,
+				ADXCVR_DRP_PORT_CHANNEL(i),
+				st->tx_enable ? -1 : 2,
+				st->tx_enable ? 2 : -1);
+			if (!ret)
+				div = 2;
+
+			switch (st->xcvr.type) {
+			case XILINX_XCVR_TYPE_US_GTH3:
+				max_progdiv = 100;
+				/* This is done in the FPGA fabric */
+				if (st->xcvr.encoding == ENC_66B64B)
+					div = 2;
+				break;
+			case XILINX_XCVR_TYPE_US_GTH4:
+				max_progdiv = 132;
+				/* This is done in the FPGA fabric */
+				if (st->xcvr.encoding == ENC_66B64B)
+					div = 2;
+				break;
+			case XILINX_XCVR_TYPE_US_GTY4:
+				max_progdiv = 100;
+				break;
+			default:
+				return -EINVAL;
+			}
+
+			prog_div = DIV_ROUND_CLOSEST(ratio * out_div, 2 * div);
+
+			if (prog_div > max_progdiv) {
+				prog_div = 0; /* disabled */
+				dev_warn(st->dev,
+					"%s: No PROGDIV divider found for OUTDIV=%u, disabling output!",
+					__func__, out_div);
+			}
+
+			ret = xilinx_xcvr_write_prog_div(&st->xcvr,
+				ADXCVR_DRP_PORT_CHANNEL(i),
+				st->tx_enable ? -1 : prog_div,
+				st->tx_enable ? prog_div : -1);
+			if (ret < 0)
+				return ret;
+		}
 
 		if (!st->tx_enable) {
 			ret = xilinx_xcvr_configure_cdr(&st->xcvr,
@@ -515,6 +743,24 @@ static int adxcvr_clk_register(struct device *dev,
 	case XCVR_REFCLK_DIV2:
 		out_clk_divider = 2;
 		out_clk_multiplier = 1;
+		break;
+	case XCVR_PROGDIV_CLK:
+		switch (st->xcvr.type) {
+		case XILINX_XCVR_TYPE_US_GTH3:
+		case XILINX_XCVR_TYPE_US_GTH4:
+		case XILINX_XCVR_TYPE_US_GTY4:
+			if (st->xcvr.encoding == ENC_66B64B)
+				out_clk_divider = 66; /* lane rate / 66 */
+			else
+				out_clk_divider = 40;
+			break;
+		default:
+			/* No clock */
+			return 0;
+		}
+
+		out_clk_multiplier = 1000;
+		parent_name = clk_names[0];
 		break;
 	default:
 		/* No clock */
@@ -645,6 +891,24 @@ static const char *adxcvr_gt_names[] = {
 static const struct jesd204_dev_data adxcvr_jesd204_data = {
 };
 
+static void adxcvr_device_remove_files(void *data)
+{
+	struct adxcvr_state *st = data;
+
+	if (st->xcvr.version >= ADI_AXI_PCORE_VER(17, 2, 'a')) {
+		if (st->tx_enable) {
+			device_remove_file(st->dev, &dev_attr_prbs_error_inject);
+		} else {
+			device_remove_file(st->dev, &dev_attr_prbs_counter_reset);
+			device_remove_file(st->dev, &dev_attr_prbs_error_counters);
+			device_remove_file(st->dev, &dev_attr_prbs_status);
+		}
+		device_remove_file(st->dev, &dev_attr_prbs_select);
+	}
+
+	device_remove_file(st->dev, &dev_attr_reg_access);
+}
+
 static int adxcvr_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -706,6 +970,7 @@ static int adxcvr_probe(struct platform_device *pdev)
 	st->xcvr.dev = &pdev->dev;
 	st->xcvr.drp_ops = &adxcvr_drp_ops;
 	INIT_WORK(&st->work, adxcvr_work_func);
+	mutex_init(&st->mutex);
 
 	adxcvr_parse_dt(st, np);
 
@@ -767,8 +1032,14 @@ static int adxcvr_probe(struct platform_device *pdev)
 		ret = -EINVAL;
 		goto disable_unprepare_conv_clk2;
 	}
+
 	st->xcvr.encoding = ENC_8B10B;
 	st->xcvr.refclk_ppm = PM_200; /* TODO use clock accuracy */
+
+	if (st->xcvr.version >= ADI_AXI_PCORE_VER(17, 3, 'a')) {
+		if (((synth_conf >> 12) & 0x3) == 2)
+			st->xcvr.encoding = ENC_66B64B;
+	}
 
 	adxcvr_write(st, ADXCVR_REG_RESETN, 0);
 
@@ -797,9 +1068,23 @@ static int adxcvr_probe(struct platform_device *pdev)
 
 	device_create_file(st->dev, &dev_attr_reg_access);
 
+	if (st->xcvr.version >= ADI_AXI_PCORE_VER(17, 2, 'a')) {
+		device_create_file(st->dev, &dev_attr_prbs_select);
+
+		if (st->tx_enable) {
+			device_create_file(st->dev, &dev_attr_prbs_error_inject);
+		} else {
+			device_create_file(st->dev, &dev_attr_prbs_counter_reset);
+			device_create_file(st->dev, &dev_attr_prbs_error_counters);
+			device_create_file(st->dev, &dev_attr_prbs_status);
+		}
+	}
+
+	devm_add_action_or_reset(st->dev, adxcvr_device_remove_files, st);
+
 	ret = jesd204_fsm_start(st->jdev, JESD204_LINKS_ALL);
 	if (ret)
-		goto remove_debugfs;
+		goto unreg_eyescan;
 
 	dev_info(&pdev->dev, "AXI-ADXCVR-%s (%d.%.2d.%c) using %s on %s at 0x%08llX. Number of lanes: %d.",
 		st->tx_enable ? "TX" : "RX",
@@ -813,8 +1098,7 @@ static int adxcvr_probe(struct platform_device *pdev)
 
 	return 0;
 
-remove_debugfs:
-	device_remove_file(st->dev, &dev_attr_reg_access);
+unreg_eyescan:
 	adxcvr_eyescan_unregister(st);
 unreg_adxcvr_clk:
 	if (st->clks[1])
@@ -840,7 +1124,6 @@ static int adxcvr_remove(struct platform_device *pdev)
 {
 	struct adxcvr_state *st = platform_get_drvdata(pdev);
 
-	device_remove_file(st->dev, &dev_attr_reg_access);
 	adxcvr_eyescan_unregister(st);
 	if (st->clks[1])
 		clk_unregister_fixed_factor(st->clks[1]);

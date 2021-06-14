@@ -1019,6 +1019,22 @@ static int adrv9009_do_setup(struct adrv9009_rf_phy *phy)
 			goto out_disable_tx_clk;
 		}
 	}
+
+	if (has_tx_and_en(phy)) {
+		ret = TALISE_setTxAttenCtrlPin(phy->talDevice, TAL_TX1, &phy->tx1_atten_ctrl_pin);
+		if (ret != TALACT_NO_ACTION) {
+			dev_err(&phy->spi->dev, "%s:%d (ret %d)", __func__, __LINE__, ret);
+			ret = -EFAULT;
+			goto out_disable_tx_clk;
+		}
+		ret = TALISE_setTxAttenCtrlPin(phy->talDevice, TAL_TX2, &phy->tx2_atten_ctrl_pin);
+		if (ret != TALACT_NO_ACTION) {
+			dev_err(&phy->spi->dev, "%s:%d (ret %d)", __func__, __LINE__, ret);
+			ret = -EFAULT;
+			goto out_disable_tx_clk;
+		}
+	}
+
 	/* Function to turn radio on, Enables transmitters and receivers */
 	/* that were setup during TALISE_initialize() */
 	ret = TALISE_radioOn(phy->talDevice);
@@ -1126,14 +1142,15 @@ static int adrv9009_setup(struct adrv9009_rf_phy *phy)
 				 __func__, __LINE__);
 		} else {
 			if (framer_b_m != 2 || framer_b_f != 2 ||
-				orx_channel_enabled != 1)
+				orx_channel_enabled == TAL_ORX1ORX2)
 				dev_warn(&phy->spi->dev,
 					 "%s:%d: ORx samples might be incorrect",
 					 __func__, __LINE__);
 
 			phy->talInit.jesd204Settings.framerB.M = 2;
 			phy->talInit.jesd204Settings.framerB.F = 2;
-			phy->talInit.obsRx.obsRxChannelsEnable = 1;
+			if (orx_channel_enabled == TAL_ORX1ORX2)
+				phy->talInit.obsRx.obsRxChannelsEnable = TAL_ORX1;
 		}
 	}
 
@@ -1581,12 +1598,15 @@ static ssize_t adrv9009_phy_show(struct device *dev,
 		}
 
 		num_links = jesd204_get_active_links_num(jdev);
-		if (num_links < 0)
-			return num_links;
+		if (num_links < 0) {
+			ret = num_links;
+			break;
+		}
 
 		ret = jesd204_get_links_data(jdev, links, num_links);
 		if (ret)
-			return ret;
+			break;
+
 		err = 0;
 		for (i = 0; i < num_links; i++) {
 			if (links[i]->error) {
@@ -1603,12 +1623,14 @@ static ssize_t adrv9009_phy_show(struct device *dev,
 		}
 
 		num_links = jesd204_get_active_links_num(jdev);
-		if (num_links < 0)
-			return num_links;
+		if (num_links < 0) {
+			ret = num_links;
+			break;
+		}
 
 		ret = jesd204_get_links_data(jdev, links, num_links);
 		if (ret)
-			return ret;
+			break;
 		/*
 		 * Take the slowest link; if there are N links and one is paused, all are paused.
 		 * Not sure if this can happen yet, but best design it like this here.
@@ -1629,12 +1651,14 @@ static ssize_t adrv9009_phy_show(struct device *dev,
 		}
 
 		num_links = jesd204_get_active_links_num(jdev);
-		if (num_links < 0)
-			return num_links;
+		if (num_links < 0) {
+			ret = num_links;
+			break;
+		}
 
 		ret = jesd204_get_links_data(jdev, links, num_links);
 		if (ret)
-			return ret;
+			break;
 		/*
 		 * just get the first link state; we're assuming that all 3 are in sync
 		 * and that ADRV9009_JESD204_FSM_PAUSED was called before
@@ -1697,7 +1721,7 @@ static IIO_DEVICE_ATTR(calibrate_rx_phase_correction_en, S_IRUGO | S_IWUSR,
 		       adrv9009_phy_store,
 		       ADRV9009_INIT_CAL | (TAL_RX_PHASE_CORRECTION << 8));
 
-static IIO_DEVICE_ATTR(calibrate_frm_en, S_IRUGO | S_IWUSR,
+static IIO_DEVICE_ATTR(calibrate_fhm_en, S_IRUGO | S_IWUSR,
 		       adrv9009_phy_show,
 		       adrv9009_phy_store,
 		       ADRV9009_INIT_CAL | (TAL_FHM_CALS << 8));
@@ -1752,7 +1776,7 @@ static struct attribute *adrv9009_phy_attributes[] = {
 	&iio_dev_attr_calibrate_tx_lol_en.dev_attr.attr,
 	&iio_dev_attr_calibrate_tx_lol_ext_en.dev_attr.attr,
 	&iio_dev_attr_calibrate_rx_phase_correction_en.dev_attr.attr,
-	&iio_dev_attr_calibrate_frm_en.dev_attr.attr,
+	&iio_dev_attr_calibrate_fhm_en.dev_attr.attr,
 	NULL,
 };
 
@@ -1767,7 +1791,7 @@ static struct attribute *adrv90081_phy_attributes[] = {
 	&iio_dev_attr_calibrate.dev_attr.attr,
 	&iio_dev_attr_calibrate_rx_qec_en.dev_attr.attr,
 	&iio_dev_attr_calibrate_rx_phase_correction_en.dev_attr.attr,
-	&iio_dev_attr_calibrate_frm_en.dev_attr.attr,
+	&iio_dev_attr_calibrate_fhm_en.dev_attr.attr,
 	NULL,
 };
 
@@ -1783,7 +1807,7 @@ static struct attribute *adrv90082_phy_attributes[] = {
 	&iio_dev_attr_calibrate_tx_qec_en.dev_attr.attr,
 	&iio_dev_attr_calibrate_tx_lol_en.dev_attr.attr,
 	&iio_dev_attr_calibrate_tx_lol_ext_en.dev_attr.attr,
-	&iio_dev_attr_calibrate_frm_en.dev_attr.attr,
+	&iio_dev_attr_calibrate_fhm_en.dev_attr.attr,
 	NULL,
 };
 
@@ -5404,7 +5428,8 @@ static int adrv9009_jesd204_link_init(struct jesd204_dev *jdev,
 			} else {
 				phy->talInit.jesd204Settings.framerB.M = 2;
 				phy->talInit.jesd204Settings.framerB.F = 2;
-				phy->talInit.obsRx.obsRxChannelsEnable = 1;
+				if (phy->talInit.obsRx.obsRxChannelsEnable == TAL_ORX1ORX2)
+					phy->talInit.obsRx.obsRxChannelsEnable = TAL_ORX1;
 			}
 		} else {
 			phy->talInit.jesd204Settings.framerB.M = phy->framer_b_m;
@@ -5438,7 +5463,7 @@ static int adrv9009_jesd204_link_init(struct jesd204_dev *jdev,
 	} else if (deframer) {
 		lnk->num_converters = deframer->M;
 		lnk->num_lanes = hweight8(deframer->deserializerLanesEnabled);
-		lnk->octets_per_frame = (2 * lnk->num_converters) / lnk->num_lanes;
+		lnk->octets_per_frame = (deframer->Np * lnk->num_converters) / (8 * lnk->num_lanes);
 		lnk->frames_per_multiframe = deframer->K;
 		lnk->device_id = deframer->deviceId;
 		lnk->bank_id = deframer->bankId;
@@ -5995,6 +6020,18 @@ static int adrv9009_jesd204_post_running_stage(struct jesd204_dev *jdev,
 	}
 	if (has_rx_and_en(phy)) {
 		ret = TALISE_setupRxAgc(phy->talDevice, &phy->rxAgcCtrl);
+		if (ret != TALACT_NO_ACTION) {
+			dev_err(&phy->spi->dev, "%s:%d (ret %d)", __func__, __LINE__, ret);
+			return -EFAULT;
+		}
+	}
+	if (has_tx_and_en(phy)) {
+		ret = TALISE_setTxAttenCtrlPin(phy->talDevice, TAL_TX1, &phy->tx1_atten_ctrl_pin);
+		if (ret != TALACT_NO_ACTION) {
+			dev_err(&phy->spi->dev, "%s:%d (ret %d)", __func__, __LINE__, ret);
+			return -EFAULT;
+		}
+		ret = TALISE_setTxAttenCtrlPin(phy->talDevice, TAL_TX2, &phy->tx2_atten_ctrl_pin);
 		if (ret != TALACT_NO_ACTION) {
 			dev_err(&phy->spi->dev, "%s:%d (ret %d)", __func__, __LINE__, ret);
 			return -EFAULT;

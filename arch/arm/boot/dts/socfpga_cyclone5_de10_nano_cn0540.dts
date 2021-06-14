@@ -34,7 +34,7 @@
 	};
 
 	one-bit-adc-dac@0 {
-		compatible = "one-bit-adc-dac";
+		compatible = "adi,one-bit-adc-dac";
 		#address-cells = <1>;
 		#size-cells = <0>;
 		in-gpios = <&gpio_out 6 GPIO_ACTIVE_HIGH>;
@@ -84,7 +84,7 @@
 	clock-frequency = <100000>;
 	ltc2606: ltc2606@0 {
 		compatible = "adi,ltc2606";
-		reg = <0x10>;
+		reg = <16>;
 		vref-supply = <&vref>;
 	};
 };
@@ -113,7 +113,7 @@
 		};
 	};
 
-	spi_engine@0x00030000 {
+	spi@0x00030000 {
 		compatible = "adi,axi-spi-engine-1.00.a";
 		reg = <0x00030000 0x00010000>;
 		interrupt-parent = <&intc>;

@@ -166,6 +166,9 @@ config AD7766
 config AD7768
 	tristate "Analog Devices AD7768 ADC driver"
 	depends on SPI
+	select IIO_BUFFER
+	select IIO_BUFFER_DMA
+	select IIO_BUFFER_DMAENGINE
 	help
 	  Say yes here to build support for Analog Devices AD7768 SPI analog to
 	  digital converter (ADC).
@@ -179,6 +182,8 @@ config AD7768_1
 	select IIO_BUFFER
 	select IIO_TRIGGER
 	select IIO_TRIGGERED_BUFFER
+	select IIO_BUFFER_DMA
+	select IIO_BUFFER_DMAENGINE
 	help
 	  Say yes here to build support for Analog Devices AD7768-1 SPI
 	  simultaneously sampling sigma-delta analog to digital converter (ADC).
@@ -340,6 +345,16 @@ config AD9081
 	  AD9081, AD9082 mixed signal front end (MxFE).
 	  Provides direct access via sysfs.
 
+config AD9083
+	tristate "16-Channel, 125 MHz Bandwidth, JESD204B ADC"
+	depends on SPI
+	select CF_AXI_ADC
+	help
+	  Say yes here to build support for Analog Devices:
+	  AD9083 16-Channel, 125 MHz Bandwidth, JESD204B
+	  Analog-to-Digital Converter.
+	  Provides direct access via sysfs.
+
 config AD9208
 	tristate "Analog Devices AD9208 and similar high speed ADCs"
 	depends on SPI
@@ -386,6 +401,21 @@ config ADRV9001
           Say yes here to build support for Analog Devices:
           ADRV9001/ADRV9002 RF Transceivers. Provides direct access
           via sysfs
+
+config ADRV9001_COMMON_VERBOSE
+	bool "Enables verbose error reports"
+	depends on ADRV9001
+	default y
+
+config ADRV9001_ARM_VERBOSE
+	bool "Enables ARM verbose error messages"
+	depends on ADRV9001
+	default y
+
+config ADRV9001_VALIDATE_PARAMS
+	bool "Causes the API to validate all the input parameters"
+	depends on ADRV9001
+	default y
 
 config ADRV9009
 	tristate "Analog Devices ADRV9009/ADRV9008 RF Transceiver driver"
@@ -1334,4 +1364,15 @@ config XILINX_AMS
          The driver can also be build as a module. If so, the module will be called
          xilinx-ams.
 
+config VERSAL_SYSMON
+	tristate "Xilinx Sysmon driver for Versal"
+	depends on HAS_IOMEM
+	help
+	  Say yes here to have support for the Xilinx Sysmon.
+	  The driver will enable users to monitor temperature and voltage on the
+	  Xilinx Versal platform.
+	  The HW also supports I2C access but it is not supported by the driver.
+
+	  The driver can also be build as a module. If so, the module will be called
+	  versal-sysmon.
 endmenu

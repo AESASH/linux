@@ -33,7 +33,7 @@
 	};
 
 	one-bit-adc-dac@0 {
-		compatible = "one-bit-adc-dac";
+		compatible = "adi,one-bit-adc-dac";
 		#address-cells = <1>;
 		#size-cells = <0>;
 		in-gpios =  <&gpio0 91 GPIO_ACTIVE_HIGH>;
@@ -130,7 +130,7 @@
 		};
 	};
 
-	axi_spi_engine_0: axi-spi-engine@44a00000 {
+	axi_spi_engine_0: spi@44a00000 {
 		compatible = "adi,axi-spi-engine-1.00.a";
 		reg = <0x44a00000 0x10000>;
 		interrupt-parent = <&intc>;

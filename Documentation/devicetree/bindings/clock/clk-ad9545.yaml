@@ -19,8 +19,14 @@ properties:
     enum:
       - adi,ad9545
 
-  "#clock-cells":
+  '#address-cells':
     const: 1
+
+  '#size-cells':
+    const: 0
+
+  "#clock-cells":
+    const: 2
 
   reg:
     description: |
@@ -43,13 +49,9 @@ properties:
       Otherwise it is assumed that there is a TCXO or OCXO connected.
     type: boolean
 
-  adi,ref-frequency-mhz:
+  adi,ref-frequency-hz:
     description: |
       Reference input frequency at XOA,XOB. This is used for the system clock.
-    allOf:
-      - $ref: /schemas/types.yaml#/definitions/uint32
-    minItems: 2
-    maxItems: 2
 
   clocks:
     items:
@@ -57,12 +59,85 @@ properties:
       - description: Ref AA clock input
       - description: Ref B clock input
       - description: Ref BB clock input
+      - description: Ref M0 clock input
+      - description: Ref M1 clock input
+      - description: Ref M2 clock input
     maxItems: 4
+
+  assigned-clocks:
+    description:
+      Clocks are identified using two cells <&ad9545 clock_type clock_address>.
+    minItems: 1
+    maxItems: 14
+
+  assigned-clock-rates:
+    minItems: 1
+    maxItems: 14
+
+  assigned-clock-phases:
+    minItems: 1
+    maxItems: 14
 
   clock-output-names:
     maxItems: 10
 
+  aux-dpll@0:
+    description: |
+      Auxiliary DPLL used for Closed-Loop method of system clock compensation.
+    type: object
+
+    properties:
+      reg:
+        maxItems: 1
+
+      adi,compensation-source:
+        description: |
+          System clock closed loop compensation source.
+          Choose from Ref-A to Ref-BB [0-3] or aux TDCs [4-5].
+        $ref: /schemas/types.yaml#/definitions/uint32
+        enum: [0, 1, 2, 3, 4, 5]
+
+      adi,aux-dpll-bw-mhz:
+        description: |
+          Auxiliary DPLL bandwidth.
+        minimum: 100
+        maximum: 2000000
+
+      adi,rate-change-limit:
+        description: |
+          Error compensation rate change limiting expressed in ppb/s. Disabled if property is
+          missing.
+        $ref: /schemas/types.yaml#/definitions/uint32
+        enum: [715, 1430, 2860, 5720, 11440, 22880, 45760]
+
+    required:
+      - reg
+      - adi,compensation-source
+      - adi,aux-dpll-bw-mhz
+
 patternProperties:
+  "^aux-tdc-clk@[0-1]$":
+    description: |
+      Represents a Mx pin reference clock input.
+    type: object
+
+    properties:
+      reg:
+        description: |
+          Address of the Auxiliary TDC.
+        maximum: 1
+
+      adi,pin-nr:
+        description: |
+          Pin number to be the source of this TDC.
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 0
+        maximum: 6
+
+    required:
+      - reg
+      - adi,pin-nr
+
   "^ref-input-clk@[0-3]$":
     description: |
       Represents a reference clock input.
@@ -78,74 +153,93 @@ patternProperties:
       adi,single-ended-mode:
         description: |
           Single-ended configuration mode.
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - enum: [0, 1, 2, 3]
-        maxItems: 1
+        $ref: /schemas/types.yaml#/definitions/uint32
+        enum: [0, 1, 2, 3]
 
       adi,differential-mode:
         description: |
           Differential configuration mode.
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - enum: [0, 1, 2]
-        maxItems: 1
+        $ref: /schemas/types.yaml#/definitions/uint32
+        enum: [0, 1, 2]
 
       adi,r-divider-ratio:
         description: |
           Each reference input has a dedicated divider.
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - minimum: 1
-          - maximum: 1073741824
-        maxItems: 1
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 1
+        maximum: 1073741824
 
       adi,ref-dtol-pbb:
         description: |
           REFx offset limit. Constitutes a fractional portion of the corresponding nominal period.
           The 24-bit number represents fractional units of parts per billion (ppb) up to a
           maximum of approximately 17 million ppb (1.7%).
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - minimum: 0
-          - maximum: 16777215
-          - default: 100000
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 0
+        maximum: 16777215
+        default: 100000
 
       adi,ref-monitor-hysteresis-pbb:
         description: |
           Basis points of the offset limit representing per ten thousand of REFx offset limit.
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - enum: [0, 3125, 6250, 12500, 25000, 50000, 75000, 87500]
-          - default: 12500
+        $ref: /schemas/types.yaml#/definitions/uint32
+        enum: [0, 3125, 6250, 12500, 25000, 50000, 75000, 87500]
+        default: 12500
 
       adi,ref-validation-timer-ms:
         description: |
           Time required for a reference to remain in tolerance condition before being
           available to be used.
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - minimum: 1
-          - maximum: 1048574
-          - default: 10
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 1
+        maximum: 1048574
+        default: 10
 
       adi,freq-lock-threshold-ps:
         description: |
           Phase lock detector threshold (in picoseconds).
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - minimum: 1
-          - maximum: 16777215
-        maxItems: 1
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 1
+        maximum: 16777215
 
       adi,phase-lock-threshold-ps:
         description: |
           Profile 0 frequency lock threshold. Frequency lock detector threshold (in picoseconds).
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - minimum: 1
-          - maximum: 16777215
-        maxItems: 1
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 1
+        maximum: 16777215
+
+      adi,phase-lock-fill-rate:
+        description: |
+          Parameter used by the DPLL Phase Lock Detector.
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 1
+        maximum: 255
+        default: 10
+
+      adi,phase-lock-drain-rate:
+        description: |
+          Parameter used by the DPLL Phase Lock Detector.
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 1
+        maximum: 255
+        default: 10
+
+      adi,freq-lock-fill-rate:
+        description: |
+          Parameter used by the DPLL Frequency Lock Detector.
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 1
+        maximum: 255
+        default: 10
+
+      adi,freq-lock-drain-rate:
+        description: |
+          Parameter used by the DPLL Frequency Lock Detector.
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 1
+        maximum: 255
+        default: 10
 
     required:
       - reg
@@ -167,27 +261,86 @@ patternProperties:
           PLL number. AD9545 has two PLLs.
         maxItems: 1
 
-      adi,pll-source:
-        description: |
-          Each PLL can have 1 signal source. Choose from Ref-A to Ref-BB [0-3] or aux NCOs [4-5].
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - enum: [0, 1, 2, 3, 4, 5]
-        maxItems: 1
+      '#address-cells':
+         const: 1
 
-      adi,pll-loop-bandwidth-hz:
+      '#size-cells':
+         const: 0
+
+      adi,fast-acq-trigger-mode:
         description: |
-          PLL loop bandwidth.
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - minimum: 1
-          - maximum: 1850
-        maxItems: 1
+          If this is not specified Fast Acquisition will be used every time. See reg 0x2106
+          for constraints on Fast Acquisition trigger.
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 0
+        maximum: 15
+        default: 0
+
+    patternProperties:
+      "^profile@[0-5]$":
+        description: |
+          Represents a DPLL profile. Each DPLL can have up to 6 specified sources
+          wih priorities assigned.
+        type: object
+
+        properties:
+          reg:
+            description: |
+              Profile number. A DPLL can have up to 6 translation profiles.
+            maxItems: 1
+          adi,profile-priority:
+            description: |
+              Profile selection priority. 0 is the highest, 31 is the lowest. For revertive
+              reference switching, ensure that priority difference is > 7.
+            $ref: /schemas/types.yaml#/definitions/uint32
+            minimum: 0
+            maximum: 31
+
+          adi,pll-source:
+            description: |
+              Each PLL can have 1 signal source. Choose from Ref-A to Ref-BB [0-3] or aux NCOs [4-5].
+            $ref: /schemas/types.yaml#/definitions/uint32
+            enum: [0, 1, 2, 3, 4, 5]
+
+          adi,pll-loop-bandwidth-uhz:
+            description: |
+              PLL loop bandwidth in microhertz.
+            $ref: /schemas/types.yaml#/definitions/uint32
+            minimum: 1
+            maximum: 1850000000
+            default: 200000000
+
+          adi,fast-acq-excess-bw:
+            description: |
+              Controls the DPLL loop bandwidth scaling factor while in fast acquisition mode.
+              0 means this feature is disabled.
+            $ref: /schemas/types.yaml#/definitions/uint32
+            enum: [0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+            default: 0
+
+          adi,fast-acq-timeout-ms:
+            description: |
+              Fast acquisition timeout controls the maximum amount of time that DPLL waits to
+              achieve phase lock before reducing the loop bandwidth by a factor of two.
+            $ref: /schemas/types.yaml#/definitions/uint32
+            enum: [1, 10, 50, 100, 500, 1000, 10000, 50000]
+            default: 1
+
+          adi,fast-acq-lock-settle-ms:
+            description: |
+              Controls how long DPLL must wait after achieving phase lock before reducing
+              the loop bandwidth by a factor of 2.
+            $ref: /schemas/types.yaml#/definitions/uint32
+            enum: [1, 10, 50, 100, 500, 1000, 10000, 50000]
+            default: 1
+
+        required:
+          - reg
+          - adi,pll-source
+          - adi,pll-loop-bandwidth-uhz
 
     required:
       - reg
-      - adi,pll-source
-      - adi,pll-loop-bandwidth-hz
 
   "^aux-nco-clk@[0-1]$":
     description: |
@@ -204,27 +357,23 @@ patternProperties:
       adi,freq-lock-threshold-ps:
         description: |
           Phase lock detector threshold (in picoseconds).
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - minimum: 1
-          - maximum: 16777215
-        maxItems: 1
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 1
+        maximum: 16777215
 
       adi,phase-lock-threshold-ps:
         description: |
           Profile 0 frequency lock threshold. Frequency lock detector threshold (in picoseconds).
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - minimum: 1
-          - maximum: 16777215
-        maxItems: 1
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 1
+        maximum: 16777215
 
     required:
       - reg
       - adi,freq-lock-threshold-ps
       - adi,phase-lock-threshold-ps
 
-  "^output-clk@([0-5]|1[0-3])$":
+  "^output-clk@([0-9]|1[0-3])$":
     description: |
       Represents a clock output.
     type: object
@@ -245,18 +394,14 @@ patternProperties:
       adi,current-source-microamp:
         description: |
           The magnitude of the driver current.
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - enum: [7500, 12500, 15000]
-        minItems: 1
+        $ref: /schemas/types.yaml#/definitions/uint32
+        enum: [7500, 12500, 15000]
 
       adi,output-mode:
         description: |
           Output driver mode.
-        allOf:
-          - $ref: /schemas/types.yaml#/definitions/uint32
-          - enum: [0, 1, 2]
-        maxItems: 1
+        $ref: /schemas/types.yaml#/definitions/uint32
+        enum: [0, 1, 2]
 
     required:
       - reg
@@ -266,7 +411,7 @@ patternProperties:
 required:
   - compatible
   - reg
-  - adi,ref-frequency-mhz
+  - adi,ref-frequency-hz
 
 "additionalProperties": false
 
@@ -303,8 +448,16 @@ examples:
 
                 ad9545_apll1: pll-clk@AD9545_PLL1 {
                         reg = <AD9545_PLL1>;
-                        adi,pll-source = <4>;
-                        adi,pll-loop-bandwidth-hz = <200>;
+
+                        #address-cells = <1>;
+                        #size-cells = <0>;
+
+                        profile@0 {
+                               reg = <0>;
+                               adi,pll-source = <4>;
+                               adi,profile-priority = <0>;
+                               adi,pll-loop-bandwidth-uhz = <200000000>;
+                        };
                 };
 
                 output-clk@AD9545_Q1A {

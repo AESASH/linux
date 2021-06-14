@@ -52,6 +52,7 @@ config IIO_ALL_ADI_DRIVERS
 	select CF_AXI_ADC
 	select AD9208
 	select AD9081
+	select AD9083
 	select AD9361
 	select AD9361_EXT_BAND_CONTROL
 	select AD9371
@@ -68,6 +69,7 @@ config IIO_ALL_ADI_DRIVERS
 	select LTC2497
 	select LTC2308
 	select AD8366
+	select ADA4250
 	select HMC425
 	select AD5270
 	select AD5360
@@ -98,6 +100,7 @@ config IIO_ALL_ADI_DRIVERS
 	select AD9523
 	select AD9528
 	select AD9548
+	select ADF4159
 	select ADF4350
 	select ADF4360
 	select ADF4371

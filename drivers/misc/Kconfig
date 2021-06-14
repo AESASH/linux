@@ -51,6 +51,17 @@ config AD525X_DPOT_SPI
 	  To compile this driver as a module, choose M here: the
 	  module will be called ad525x_dpot-spi.
 
+config ADI_AXI_DATA_OFFLOAD
+	bool "support Analog Devices Data Offload Engine"
+	depends on HAS_IOMEM
+	depends on OF
+	help
+	  The data offload engine is effectively just a stream FIFO with
+	  some extra configurability.
+
+	  This option is usually not enabled manually but rather by other
+	  drivers that use the data offload engine to manage DMA transfers.
+
 config ATMEL_TCLIB
 	bool "Atmel AT32/AT91 Timer/Counter Library"
 	depends on ARCH_AT91
@@ -480,6 +491,19 @@ config XILINX_TRAFGEN
 	  configurable options which are provided through sysfs entries allow
 	  allow the user to generate a wide variety of traffic based on their
 	  their requirements.
+
+	  If unsure, say N
+
+config XILINX_AIE
+	tristate "Xilinx AI engine"
+	depends on ARM64 || COMPILE_TEST
+	select FPGA_BRIDGE
+	help
+	  This option enables support for the Xilinx AI engine driver.
+	  One Xilinx AI engine device can have multiple partitions (groups of
+	  AI engine tiles). Xilinx AI engine device driver instance manages
+	  AI engine partitions. User application access its partitions through
+	  AI engine partition instance file operations.
 
 	  If unsure, say N
 

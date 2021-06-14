@@ -14,14 +14,11 @@
 #include <linux/phy.h>
 #include <linux/property.h>
 
-#define PHY_ID_ADIN1100				0x0283bc80
+#define PHY_ID_ADIN1100				0x0283bc81
 
 static const int phy_10_features_array[] = {
 	ETHTOOL_LINK_MODE_10baseT_Full_BIT,
 };
-
-static __ETHTOOL_DECLARE_LINK_MODE_MASK(phy_adin_t1l_features)	__ro_after_init;
-#define ADIN_T1L_FEATURES	((unsigned long *)&phy_adin_t1l_features)
 
 #define ADIN_B10L_PCS_CNTRL			0x08e6
 #define   ADIN_PCS_CNTRL_B10L_LB_PCS_EN		BIT(14)
@@ -33,6 +30,7 @@ static __ETHTOOL_DECLARE_LINK_MODE_MASK(phy_adin_t1l_features)	__ro_after_init;
 #define   ADIN_PMA_STAT_B10L_LB_PMA_LOC_ABLE	BIT(13)
 #define   ADIN_PMA_STAT_B10L_TX_LVL_HI_ABLE	BIT(12)
 
+#define ADIN_AN_STATUS				0x0201
 #define ADIN_AN_ADV_ABILITY_L			0x0202
 #define ADIN_AN_ADV_ABILITY_M			0x0203
 #define ADIN_AN_ADV_ABILITY_H			0x0204U
@@ -54,80 +52,64 @@ static __ETHTOOL_DECLARE_LINK_MODE_MASK(phy_adin_t1l_features)	__ro_after_init;
 #define   ADIN_AN_LP_ADV_B10L_TX_LVL_HI_REQ	BIT(12)
 #define   ADIN_AN_LP_ADV_B10S_HD		BIT(11)
 
+#define ADIN_FC_EN				0x8001
+
+#define ADIN_CRSM_SFT_RST			0x8810
+#define   ADIN_CRSM_SFT_RST_EN			BIT(0)
+
 #define ADIN_CRSM_SFT_PD_CNTRL			0x8812
 #define   ADIN_CRSM_SFT_PD_CNTRL_EN		BIT(0)
 
 #define ADIN_CRSM_STAT				0x8818
 #define   ADIN_CRSM_SFT_PD_RDY			BIT(1)
+#define   ADIN_CRSM_SYS_RDY			BIT(0)
 
 #define ADIN_MAC_IF_LOOPBACK			0x803d
 #define   ADIN_MAC_IF_LOOPBACK_EN		BIT(0)
 #define   ADIN_MAC_IF_REMOTE_LOOPBACK_EN	BIT(2)
 
+struct adin_hw_stat {
+	const char *string;
+	u16 reg1;
+	u16 reg2;
+};
+
+static const struct adin_hw_stat adin_hw_stats[] = {
+	{ "total_frames_error_count",		0x8008 },
+	{ "total_frames_count",			0x8009, 0x800A }, /* hi, lo */
+	{ "length_error_frames_count",		0x800B },
+	{ "alignment_error_frames_count",	0x800C },
+	{ "symbol_error_count",			0x800D },
+	{ "oversized_frames_count",		0x800E },
+	{ "undersized_frames_count",		0x800F },
+	{ "odd_nibble_frames_count",		0x8010 },
+	{ "odd_preamble_packet_count",		0x8011 },
+	{ "false_carrier_events_count",		0x8013 },
+};
+
 /**
  * struct adin_priv - ADIN PHY driver private data
  * tx_level_24v			set if the PHY supports 2.4V TX levels (10BASE-T1L)
+ * stats:			statistic counters for the PHY
  */
 struct adin_priv {
+	u64			stats[ARRAY_SIZE(adin_hw_stats)];
 	unsigned int		tx_level_24v:1;
 };
-
-/* The ADIN T1L PHY supports Clause 45-only access, but is not a C45 device
- * in the strictest sense of how Linux considers C45 capable devices.
- *
- * For once, it doesn't support C45 package IDs, so it won't probe
- * via the normal get_phy_c45_devs_in_pkg() path.
- * Secondly, the chip implements mostly 10BASE-T1L regs, so autonegotiation
- * requires some other regs which are IEEE spec-ed, but not standard in Linux.
- */
-
-static u32 adin_mdio_addr_xlate(int devad, u16 regnum)
-{
-	u32 addr = MII_ADDR_C45 | (devad << 16) | (regnum & 0xffff);
-
-	switch (devad) {
-	/* BASE-T1L auto-negotiation regs start at 0x0200.
-	 * The Control & Status bitfields are similar to standard regs.
-	 */
-	case MDIO_MMD_AN:
-		switch (regnum) {
-		case MDIO_STAT1:
-		case MDIO_CTRL1:
-			addr |= 0x0200;
-			break;
-		}
-	}
-
-	return addr;
-}
-
-static int adin_read_mmd(struct phy_device *phydev, int devad, u16 regnum)
-{
-	u32 addr = adin_mdio_addr_xlate(devad, regnum);
-
-	return __mdiobus_read(phydev->mdio.bus, phydev->mdio.addr, addr);
-}
-
-static int adin_write_mmd(struct phy_device *phydev, int devad, u16 regnum,
-			  u16 val)
-{
-	u32 addr = adin_mdio_addr_xlate(devad, regnum);
-
-	return __mdiobus_write(phydev->mdio.bus, phydev->mdio.addr, addr, val);
-}
 
 static int adin_match_phy_device(struct phy_device *phydev)
 {
 	struct mii_bus *bus = phydev->mdio.bus;
+	int phy_addr = phydev->mdio.addr;
 	u32 id;
 	int rc;
 
 	mutex_lock(&bus->mdio_lock);
 
-	/* Need to call adin_read_mmd() directly here, because at this point
+	/* Need to call __mdiobus_read() directly here, because at this point
 	 * in time, the driver isn't attached to the PHY device.
 	 */
-	rc = adin_read_mmd(phydev, MDIO_MMD_PMAPMD, MDIO_DEVID1);
+	rc = __mdiobus_read(bus, phy_addr, MDIO_DEVID1);
 	if (rc < 0) {
 		mutex_unlock(&bus->mdio_lock);
 		return rc;
@@ -135,7 +117,7 @@ static int adin_match_phy_device(struct phy_device *phydev)
 
 	id = rc << 16;
 
-	rc = adin_read_mmd(phydev, MDIO_MMD_PMAPMD, MDIO_DEVID2);
+	rc = __mdiobus_read(bus, phy_addr, MDIO_DEVID2);
 	mutex_unlock(&bus->mdio_lock);
 
 	if (rc < 0)
@@ -177,16 +159,16 @@ static int adin_read_lpa(struct phy_device *phydev)
 
 	linkmode_zero(phydev->lp_advertising);
 
-	val = phy_read_mmd(phydev, MDIO_MMD_AN, MDIO_STAT1);
+	val = phy_read_mmd(phydev, MDIO_MMD_AN, ADIN_AN_STATUS);
 	if (val < 0)
 		return val;
 
 	if (!(val & MDIO_AN_STAT1_COMPLETE)) {
-                phydev->pause = 0;
-                phydev->asym_pause = 0;
+		phydev->pause = 0;
+		phydev->asym_pause = 0;
 
-                return 0;
-        }
+		return 0;
+	}
 
 	linkmode_set_bit(ETHTOOL_LINK_MODE_Autoneg_BIT,
 			 phydev->lp_advertising);
@@ -391,7 +373,94 @@ static int adin_config_init(struct phy_device *phydev)
 		priv->tx_level_24v = 0;
 	}
 
+	ret = phy_write_mmd(phydev, MDIO_MMD_VEND2, ADIN_FC_EN, 1);
+	if (ret < 0)
+		return ret;
+
 	return 0;
+}
+
+static int adin_soft_reset(struct phy_device *phydev)
+{
+	int timeout;
+	int ret;
+
+	ret = phy_set_bits_mmd(phydev, MDIO_MMD_VEND1, ADIN_CRSM_SFT_RST, ADIN_CRSM_SFT_RST_EN);
+	if (ret < 0)
+		return ret;
+
+	timeout = 30;
+	while (timeout >= 0) {
+		ret = phy_read_mmd(phydev, MDIO_MMD_VEND1, ADIN_CRSM_STAT);
+		if (ret < 0)
+			return ret;
+
+		if (ret & ADIN_CRSM_SYS_RDY)
+			return 0;
+
+		usleep_range(10000, 15000);
+		timeout -= 10;
+	}
+
+	return -ETIMEDOUT;
+}
+
+static int adin_get_features(struct phy_device *phydev)
+{
+	linkmode_set_bit_array(phy_basic_ports_array, ARRAY_SIZE(phy_basic_ports_array),
+			       phydev->supported);
+
+	linkmode_set_bit_array(phy_10_features_array, ARRAY_SIZE(phy_10_features_array),
+			       phydev->supported);
+
+	return 0;
+}
+
+static int adin_get_sset_count(struct phy_device *phydev)
+{
+	return ARRAY_SIZE(adin_hw_stats);
+}
+
+static void adin_get_strings(struct phy_device *phydev, u8 *data)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(adin_hw_stats); i++)
+		strlcpy(&data[i * ETH_GSTRING_LEN], adin_hw_stats[i].string, ETH_GSTRING_LEN);
+}
+
+static u64 adin_get_stat(struct phy_device *phydev, int i)
+{
+	const struct adin_hw_stat *stat = &adin_hw_stats[i];
+	struct adin_priv *priv = phydev->priv;
+	u64 val;
+	int ret;
+
+	ret = phy_read_mmd(phydev, MDIO_MMD_VEND2, stat->reg1);
+	if (ret < 0)
+		return (u64)(~0);
+
+	val = (0xffff & ret);
+
+	if (stat->reg2 != 0) {
+		ret = phy_read_mmd(phydev, MDIO_MMD_VEND2, stat->reg2);
+		if (ret < 0)
+			return (u64)(~0);
+
+		val = (val << 16) + (0xffff & ret);
+	}
+
+	priv->stats[i] += val;
+
+	return priv->stats[i];
+}
+
+static void adin_get_stats(struct phy_device *phydev, struct ethtool_stats *stats, u64 *data)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(adin_hw_stats); i++)
+		data[i] = adin_get_stat(phydev, i);
 }
 
 static int adin_probe(struct phy_device *phydev)
@@ -405,15 +474,6 @@ static int adin_probe(struct phy_device *phydev)
 
 	phydev->priv = priv;
 
-	/* FIXME: Will be called on each probe, but should work for now */
-	linkmode_set_bit_array(phy_basic_ports_array,
-			       ARRAY_SIZE(phy_basic_ports_array),
-			       phy_adin_t1l_features);
-
-	linkmode_set_bit_array(phy_10_features_array,
-			       ARRAY_SIZE(phy_10_features_array),
-			       phy_adin_t1l_features);
-
 	return 0;
 }
 
@@ -421,18 +481,20 @@ static struct phy_driver adin_driver[] = {
 	{
 		PHY_ID_MATCH_MODEL(PHY_ID_ADIN1100),
 		.name			= "ADIN1100",
-		.features		= ADIN_T1L_FEATURES,
+		.get_features		= adin_get_features,
 		.match_phy_device	= adin_match_phy_device,
+		.soft_reset		= adin_soft_reset,
 		.probe			= adin_probe,
 		.config_init		= adin_config_init,
 		.config_aneg		= adin_config_aneg,
 		.link_change_notify	= adin_link_change_notify,
 		.read_status		= adin_read_status,
-		.read_mmd		= adin_read_mmd,
-		.write_mmd		= adin_write_mmd,
 		.set_loopback		= adin_set_loopback,
 		.suspend		= adin_suspend,
 		.resume			= adin_resume,
+		.get_sset_count		= adin_get_sset_count,
+		.get_strings		= adin_get_strings,
+		.get_stats		= adin_get_stats,
 	},
 };
 

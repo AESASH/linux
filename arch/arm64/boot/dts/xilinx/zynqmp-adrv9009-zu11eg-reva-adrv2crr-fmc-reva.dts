@@ -104,7 +104,7 @@
 		sw0 {
 			label = "SW0";
 			linux,input-type = <EV_SW>;
-			linux,code = <SW_LID>;
+			linux,code = <SW_LINEIN_INSERT>;
 			gpios = <&gpio 82 0>;
 		};
 
@@ -184,6 +184,7 @@
 	phy-handle = <&phy1>;
 	phy-mode = "sgmii";
 	phys = <&lane0 PHY_TYPE_SGMII 0 1 125000000>;
+	mdiobus-connected = <&gem3>;
 };
 
 &gem3 {
@@ -371,7 +372,7 @@
 
 		adi,vcxo-frequency = <122880000>;
 
-		adi,pll2-output-frequency = <2949120000>;
+		adi,pll2-output-frequency = <HMC7044_PLL2_OUTPUT_FREQUENCY>;
 
 		adi,sysref-timer-divider = <3840>;
 		adi,pulse-generator-mode = <HMC7044_PULSE_GEN_1_PULSE>;
@@ -398,7 +399,7 @@
 			adi,extended-name = "REFCLK_OUT0";
 			adi,divider = <96>;     // 3072000
 			adi,driver-mode = <HMC7044_DRIVER_MODE_LVDS>;
-               };
+		};
 
 		hmc7044_car_c2: channel@2 {
 			reg = <2>;
@@ -425,7 +426,6 @@
 			adi,startup-mode-dynamic-enable;
 			adi,high-performance-mode-disable;
 			adi,driver-impedance-mode = <3>;
-
 		};
 
 		hmc7044_car_c8: channel@8 {
@@ -531,7 +531,7 @@
 
 		adi,vcxo-frequency = <122880000>;
 
-		adi,pll2-output-frequency = <2949120000>;
+		adi,pll2-output-frequency = <HMC7044_PLL2_OUTPUT_FREQUENCY>;
 
 		adi,sysref-timer-divider = <3840>;
 		adi,pulse-generator-mode = <HMC7044_PULSE_GEN_1_PULSE>;
@@ -573,7 +573,7 @@
 			adi,driver-mode = <HMC7044_DRIVER_MODE_CMOS>;
 			adi,startup-mode-dynamic-enable;
 			adi,high-performance-mode-disable;
-			adi,driver-impedance-mode = <3>; /* Don't touch */
+			adi,driver-impedance-mode = <HMC7044_DRIVER_IMPEDANCE_50_OHM>; /* Don't touch */
 		};
 
 		hmc7044_ext_c6: channel@6 {
@@ -583,14 +583,7 @@
 			adi,driver-mode = <HMC7044_DRIVER_MODE_CMOS>;
 			adi,startup-mode-dynamic-enable;
 			adi,high-performance-mode-disable;
-			adi,driver-impedance-mode = <3>; /* Don't touch */
-		};
-
-		hmc7044_ext_c11: channel@11 {
-			reg = <11>;
-			adi,extended-name = "REFCLK_SFP";
-			adi,divider = <24>;	// 12288000
-			adi,driver-mode = <HMC7044_DRIVER_MODE_LVPECL>;
+			adi,driver-impedance-mode = <HMC7044_DRIVER_IMPEDANCE_50_OHM>; /* Don't touch */
 		};
 	};
 };

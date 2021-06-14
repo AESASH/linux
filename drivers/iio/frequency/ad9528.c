@@ -160,8 +160,8 @@
 #define AD9528_CLK_DIST_DIV(x)			((((x) - 1) & 0xFF) << 16)
 #define AD9528_CLK_DIST_DIV_MASK		(0xFF << 16)
 #define AD9528_CLK_DIST_DIV_REV(x)		((((x) >> 16) & 0xFF) + 1)
-#define AD9528_CLK_DIST_DRIVER_MODE(x)		(((x) & 0x3) << 13)
-#define AD9528_CLK_DIST_DRIVER_MODE_REV(x)	(((x) >> 13) & 0x3)
+#define AD9528_CLK_DIST_DRIVER_MODE(x)		(((x) & 0x3) << 14)
+#define AD9528_CLK_DIST_DRIVER_MODE_REV(x)	(((x) >> 14) & 0x3)
 #define AD9528_CLK_DIST_DIV_PHASE(x)		(((x) & 0x3F) << 8)
 #define AD9528_CLK_DIST_DIV_PHASE_MASK		(0x3F << 8)
 #define AD9528_CLK_DIST_DIV_PHASE_REV(x)	(((x) >> 8) & 0x3F)
@@ -1245,8 +1245,12 @@ static int ad9528_jesd204_link_supported(struct jesd204_dev *jdev,
 	int ret;
 	unsigned long rate;
 
-	if (reason != JESD204_STATE_OP_REASON_INIT)
+	if (reason != JESD204_STATE_OP_REASON_INIT) {
+		st->jdev_lmfc_lemc_rate = 0;
+		st->jdev_lmfc_lemc_gcd = 0;
+
 		return JESD204_STATE_CHANGE_DONE;
+	}
 
 	dev_dbg(dev, "%s:%d link_num %u reason %s\n", __func__, __LINE__, lnk->link_id, jesd204_state_op_reason_str(reason));
 

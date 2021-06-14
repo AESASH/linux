@@ -1,16 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
-/*
- * Analog Devices ADRV9002
- *
- * hdl_project: <adrv9001/zed>
- * board_revision: <1.0>
- *
- * Copyright (C) 2020 Analog Devices Inc.
- */
-/dts-v1/;
-
-#include "zynq-zed.dtsi"
-#include "zynq-zed-adv7511.dtsi"
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/gpio/gpio.h>
 
@@ -143,6 +130,7 @@
 			reg = <0x44A0C800 0x400>;
 			clocks = <&clkc 16>, <&adc0_adrv9002 2>;
 			clock-names = "s_axi_aclk", "intf_clk";
+			label = "axi-core-tdd-1";
 		};
 
 		axi_adrv9002_core_rx2: axi-adrv9002-rx2-lpc@44A02000 {
@@ -170,6 +158,7 @@
 			reg = <0x44A0CC00 0x400>;
 			clocks = <&clkc 16>, <&adc0_adrv9002 5>;
 			clock-names = "s_axi_aclk", "intf_clk";
+			label = "axi-core-tdd-2";
 		};
 
 		misc_clk_0: misc_clk_0 {

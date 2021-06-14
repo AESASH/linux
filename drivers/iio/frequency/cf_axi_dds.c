@@ -40,6 +40,7 @@
 
 #include "cf_axi_dds.h"
 #include "ad9122.h"
+#include "../../misc/adi-axi-data-offload.h"
 
 static const unsigned int interpolation_factors_available[] = {1, 8};
 
@@ -80,6 +81,7 @@ static const char * const dds_extend_names[] = {
 
 struct cf_axi_dds_state {
 	struct device			*dev_spi;
+	struct axi_data_offload_state	*data_offload;
 	struct clk			*clk;
 	struct cf_axi_dds_chip_info	*chip_info;
 	struct gpio_desc		*plddrbypass_gpio;
@@ -90,7 +92,8 @@ struct cf_axi_dds_state {
 	bool				dp_disable;
 	bool				enable;
 	bool				pl_dma_fifo_en;
-	enum fifo_ctrl			gpio_dma_fifo_ctrl;
+	enum fifo_ctrl			dma_fifo_ctrl_bypass;
+	bool				dma_fifo_ctrl_oneshot;
 
 	struct iio_info			iio_info;
 	size_t				regs_size;
@@ -209,22 +212,51 @@ static int cf_axi_dds_signed_mag_fmt_to_iio(unsigned int val, int *r_val,
 	return IIO_VAL_INT_PLUS_MICRO;
 }
 
+int cf_axi_dds_pl_ddr_fifo_ctrl_oneshot(struct cf_axi_dds_state *st, bool enable)
+{
+	int ret;
+
+	if (!st->data_offload)
+		return -ENODEV;
+
+	if (st->dma_fifo_ctrl_oneshot == enable)
+		return 0;
+
+	ret = axi_data_offload_ctrl_oneshot(st->data_offload, enable);
+	if (!ret)
+		st->dma_fifo_ctrl_oneshot = enable;
+
+	return ret;
+}
+
 int cf_axi_dds_pl_ddr_fifo_ctrl(struct cf_axi_dds_state *st, bool enable)
 {
 	enum fifo_ctrl mode;
 	int ret;
 
-	if (IS_ERR(st->plddrbypass_gpio))
-		return -ENODEV;
-
 	mode = (enable ? FIFO_ENABLE : FIFO_DISABLE);
 
-	if (st->gpio_dma_fifo_ctrl == mode)
+	if (st->data_offload) {
+		if (st->dma_fifo_ctrl_bypass == mode)
+			return 0;
+
+		ret = axi_data_offload_ctrl_bypass(st->data_offload, !enable);
+
+		if (!ret)
+			st->dma_fifo_ctrl_bypass = mode;
+
+		return ret;
+	}
+
+	if (!st->plddrbypass_gpio)
+		return -ENODEV;
+
+	if (st->dma_fifo_ctrl_bypass == mode)
 		return 0;
 
 	ret = gpiod_direction_output(st->plddrbypass_gpio, !enable);
 	if (ret == 0)
-		st->gpio_dma_fifo_ctrl = mode;
+		st->dma_fifo_ctrl_bypass = mode;
 
 	return ret;
 }
@@ -1177,13 +1209,16 @@ static struct cf_axi_dds_chip_info cf_axi_dds_chip_info_tbl[] = {
 	[ID_AD9162_COMPLEX] = {
 		.name = "AD9162",
 		.channel = {
-			CF_AXI_DDS_CHAN_BUF(0),
-			CF_AXI_DDS_CHAN_BUF(1),
-			CF_AXI_DDS_CHAN(0, 0, "1A"),
-			CF_AXI_DDS_CHAN(1, 0, "1B"),
+			CF_AXI_DDS_CHAN_BUF_MOD(0, IIO_MOD_I, 0),
+			CF_AXI_DDS_CHAN_BUF_MOD(0, IIO_MOD_Q, 1),
+			CF_AXI_DDS_CHAN(0, 0, "TX1_I_F1"),
+			CF_AXI_DDS_CHAN(1, 0, "TX1_I_F2"),
+			CF_AXI_DDS_CHAN(2, 0, "TX1_Q_F1"),
+			CF_AXI_DDS_CHAN(3, 0, "TX1_Q_F2"),
 		},
-		.num_channels = 4,
-		.num_dds_channels = 2,
+		.num_channels = 6,
+		.num_dp_disable_channels = 2,
+		.num_dds_channels = 4,
 		.num_buf_channels = 2,
 	},
 	[ID_AD9172_M2] = {
@@ -1489,48 +1524,29 @@ static const struct iio_info cf_axi_dds_info = {
 	.update_scan_mode = &cf_axi_dds_update_scan_mode,
 };
 
-static ssize_t cf_axi_dds_debugfs_read(struct file *file, char __user *userbuf,
-			      size_t count, loff_t *ppos)
+static int cf_axi_dds_debugfs_fifo_en_get(void *data, u64 *val)
 {
-	struct iio_dev *indio_dev = file->private_data;
+	struct iio_dev *indio_dev = data;
 	struct cf_axi_dds_state *st = iio_priv(indio_dev);
-	char buf[80];
 
-	ssize_t len = sprintf(buf, "%d\n", st->pl_dma_fifo_en);
-
-	return simple_read_from_buffer(userbuf, count, ppos, buf, len);
+	*val = st->pl_dma_fifo_en;
+	return 0;
 }
 
-static ssize_t cf_axi_dds_debugfs_write(struct file *file,
-		     const char __user *userbuf, size_t count, loff_t *ppos)
+static int cf_axi_dds_debugfs_fifo_en_set(void *data, u64 val)
 {
-	struct iio_dev *indio_dev = file->private_data;
+	struct iio_dev *indio_dev = data;
 	struct cf_axi_dds_state *st = iio_priv(indio_dev);
-	char buf[80], *p = buf;
-	int ret;
 
-	count = min_t(size_t, count, (sizeof(buf)-1));
-	if (copy_from_user(p, userbuf, count))
-		return -EFAULT;
+	st->pl_dma_fifo_en = !!val;
 
-	p[count] = 0;
-
-	ret = strtobool(p, &st->pl_dma_fifo_en);
-	if (ret < 0)
-		return -EINVAL;
-
-	ret = cf_axi_dds_pl_ddr_fifo_ctrl(st, st->pl_dma_fifo_en);
-	if (ret)
-		return ret;
-
-	return count;
+	return cf_axi_dds_pl_ddr_fifo_ctrl(st, st->pl_dma_fifo_en);
 }
 
-static const struct file_operations cf_axi_dds_debugfs_fops = {
-	.open = simple_open,
-	.read = cf_axi_dds_debugfs_read,
-	.write = cf_axi_dds_debugfs_write,
-};
+DEFINE_DEBUGFS_ATTRIBUTE(cf_axi_dds_debugfs_fifo_en_fops,
+			 cf_axi_dds_debugfs_fifo_en_get,
+			 cf_axi_dds_debugfs_fifo_en_set,
+			 "%llu\n");
 
 static int dds_converter_match(struct device *dev, const void *data)
 {
@@ -1748,7 +1764,7 @@ static int cf_axi_dds_setup_chip_info_tbl(struct cf_axi_dds_state *st,
 
 	reg = dds_read(st, ADI_JESD204_REG_TPL_DESCRIPTOR_2);
 	n = ADI_JESD204_TPL_TO_N(reg);
-	np = ADI_JESD204_TPL_TO_NP(reg);
+	np = roundup_pow_of_two(ADI_JESD204_TPL_TO_NP(reg));
 
 	reg = dds_read(st, ADI_REG_CONFIG);
 
@@ -1776,6 +1792,7 @@ static int cf_axi_dds_setup_chip_info_tbl(struct cf_axi_dds_state *st,
 
 		st->chip_info_generated.channel[c].scan_type.realbits = n;
 		st->chip_info_generated.channel[c].scan_type.storagebits = np;
+		st->chip_info_generated.channel[c].scan_type.shift = np - n;
 		st->chip_info_generated.channel[c].scan_type.sign = 's';
 	}
 
@@ -2013,6 +2030,10 @@ static int cf_axi_dds_probe(struct platform_device *pdev)
 	if (IS_ERR(st->jdev))
 		return PTR_ERR(st->jdev);
 
+	st->data_offload = devm_axi_data_offload_get_optional(&pdev->dev);
+	if (IS_ERR(st->data_offload))
+		return PTR_ERR(st->data_offload);
+
 	if (info->standalone) {
 		st->clk = devm_clk_get(&pdev->dev, "sampl_clk");
 		if (IS_ERR(st->clk))
@@ -2059,6 +2080,17 @@ static int cf_axi_dds_probe(struct platform_device *pdev)
 		st->dac_clk = conv->get_data_clk(conv);
 
 		st->chip_info = &cf_axi_dds_chip_info_tbl[conv->id];
+	}
+
+	/*
+	 * Sanity check that we did not got 0. Otherwise this will lead to a div by 0 exception.
+	 * We will try EPROBE_DEFER as a last resort. Might be that the converter is still
+	 * busy...
+	 */
+	if (!st->dac_clk) {
+		dev_err(&pdev->dev, "Cannot have dac_clk=0. Deferring probe...\n");
+		ret = -EPROBE_DEFER;
+		goto err_converter_put;
 	}
 
 	st->standalone = info->standalone;
@@ -2117,7 +2149,7 @@ static int cf_axi_dds_probe(struct platform_device *pdev)
 	if (info && !info->rate_format_skip_en)
 		dds_write(st, ADI_REG_RATECNTRL, ADI_RATE(rate));
 
-	if (conv) {
+	if (conv && conv->setup) {
 		ret = conv->setup(conv);
 		if (ret < 0)
 			goto err_converter_put;
@@ -2244,11 +2276,13 @@ static int cf_axi_dds_probe(struct platform_device *pdev)
 		ADI_AXI_PCORE_VER_PATCH(st->version),
 		(unsigned long long)res->start, st->regs, st->chip_info->name);
 
-	st->plddrbypass_gpio = devm_gpiod_get(&pdev->dev, "plddrbypass", GPIOD_ASIS);
-	if (!IS_ERR(st->plddrbypass_gpio) && iio_get_debugfs_dentry(indio_dev))
-		debugfs_create_file("pl_ddr_fifo_enable", 0644,
-				    iio_get_debugfs_dentry(indio_dev),
-				    indio_dev, &cf_axi_dds_debugfs_fops);
+	st->plddrbypass_gpio = devm_gpiod_get_optional(&pdev->dev,
+			"plddrbypass", GPIOD_ASIS);
+	if ((st->plddrbypass_gpio || st->data_offload)
+		&& iio_get_debugfs_dentry(indio_dev))
+		debugfs_create_file_unsafe("pl_ddr_fifo_enable", 0644,
+				iio_get_debugfs_dentry(indio_dev),
+				indio_dev, &cf_axi_dds_debugfs_fifo_en_fops);
 
 	platform_set_drvdata(pdev, indio_dev);
 
